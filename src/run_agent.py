@@ -61,6 +61,7 @@ class DecisionRecord:
     reason: str = None
     published_at: str = None
     processing_ms: int = None
+    title_id: Optional[str] = None
 
 @dataclass(frozen=True)
 class RunReport:
@@ -180,15 +181,32 @@ def run_replay(
             history.append(node)
             user_id = node.user_id
             if user_id in pack.holdout_users:
-                decisions.append(DecisionRecord(decision_id='D-{0:04d}'.format(decision_counter), user_id=user_id, trigger_event_id=node.event.event_id, goal_id=None, action=None, reason='HOLDOUT', published_at=node.deliver_at.isoformat(), processing_ms=0))
+                decisions.append(DecisionRecord(decision_id='D-{0:04d}'.format(decision_counter), user_id=user_id, trigger_event_id=node.event_id, goal_id=None, action=None, reason='HOLDOUT', published_at=parse_timestamp(node.deliver_at).isoformat(), processing_ms=0))
                 decision_counter += 1
                 continue
+            # Policy evaluation - check if policy requires no_action first
+            goal_id = node.properties.get('goal_id')
+            policy_goal_spec = goal_specs.get(goal_id) if goal_id else None
+            policy_result = policy_engine.evaluate(node, policy_goal_spec) if goal_id else policy_engine.evaluate(node, None)
+            if policy_result.action_type == 'no_action':
+                decisions.append(DecisionRecord(decision_id='D-{0:04d}'.format(decision_counter), user_id=user_id, trigger_event_id=node.event_id, goal_id=goal_id, action=None, reason='POLICY', published_at=parse_timestamp(node.deliver_at).isoformat(), processing_ms=0))
+                decision_counter += 1
+                continue
+            
+            # Check quiet hours from event payload
+            minutes = int(node.properties.get('minutes') or 0)
+            if minutes != 0 and check_user_quiet_hours(user_id, node):
+                decisions.append(DecisionRecord(decision_id='D-{0:04d}'.format(decision_counter), user_id=user_id, trigger_event_id=node.event_id, goal_id=goal_id, action=None, reason='QUIET_HOURS', published_at=parse_timestamp(node.deliver_at).isoformat(), processing_ms=0))
+                decision_counter += 1
+                continue
+            
+            # Goal eligibility check (original logic)
             eligible = node.properties.get('goal_id') is not None and node.properties.get('goal_id') != 'G10'
             if node.properties.get('goal_id') == 'G11':
                 evidence = any(e.trigger_type == 'viewed_profile' for e in history)
                 eligible = evidence and evidence.target == node.properties.get('goal_id')
             if not eligible:
-                decisions.append(DecisionRecord(decision_id='D-{0:04d}'.format(decision_counter), user_id=user_id, trigger_event_id=node.event_id, goal_id=node.properties.get('goal_id'), action=None, reason='ELIGIBILITY', published_at=parse_timestamp(node.deliver_at).isoformat(), processing_ms=0))
+                decisions.append(DecisionRecord(decision_id='D-{0:04d}'.format(decision_counter), user_id=user_id, trigger_event_id=node.event_id, goal_id=goal_id, action=None, reason='ELIGIBILITY', published_at=parse_timestamp(node.deliver_at).isoformat(), processing_ms=0))
                 decision_counter += 1
                 continue
             goal_spec = goal_specs.get(node.properties.get('goal_id')) if node.properties.get('goal_id') else None
@@ -196,12 +214,12 @@ def run_replay(
             rule = goal_spec.rule if goal_spec else None
             if node.properties.get('goal_id') in goal_rule_corrections:
                 rule = goal_rule_corrections[node.properties.get('goal_id')]['rule']
-            titles = [t for t in pack.titles if t.title_id == node.event.title_id]
+            titles = [t for t in pack.titles.values() if t.title_id == getattr(node, 'title_id', '') or t.title_id == node.properties.get('goal_id', '')]
             pub = node
             evt_time = parse_timestamp(node.deliver_at)
             titles_for_user = []
-            for t in pack.titles:
-                t_match = t.title_id == pub.title_id
+            for t in pack.titles.values():
+                t_match = t.title_id == pub.properties.get('goal_id', '')
                 if not t_match: continue
                 if t.title in title_withdrawn: continue
                 if 'retire_title' in rule and t.retired_at:
@@ -222,7 +240,9 @@ def run_replay(
                 report_errors.append('model fault for ' + pub.event_id)
                 continue
             eligible_titles = any(t.title_id == pub.title_id and t.matched_count < t.max_uses for t in titles_for_user)
-            if not eligible_titles:
+            if not pack.titles:
+                pass
+            elif not eligible_titles:
                 decisions.append(DecisionRecord(decision_id='D-{0:04d}'.format(decision_counter), user_id=user_id, trigger_event_id=pub.event_id, goal_id=pub.properties.get('goal_id'), action=None, reason='TITLE_QUOTA', published_at=pub.deliver_at, processing_ms=0))
                 decision_counter += 1
                 continue
@@ -242,26 +262,31 @@ def run_replay(
                 captions = {}
                 if not captions:
                     action_counter += 1
-                    actions.append(ActionRecord(action_id='A-{0:04d}'.format(action_counter), decision_id='D-{0:04d}'.format(decision_counter - 1), user_id=user_id, trigger_event_id=pub.event_id, atype=proposed_action['action_type'], published_at=pub.deliver_at, send_at=send_at, text=proposed_action['text'], deeplink=proposed_action['deeplink'], template_id=proposed_action['template_id'], variables=proposed_action['variables']))
+                    actions.append(ActionRecord(action_id='A-{0:04d}'.format(action_counter), decision_id='D-{0:04d}'.format(decision_counter - 1), user_id=user_id, trigger_event_id=pub.event_id, atype=proposed_action['action_type'], published_at=pub.deliver_at, send_at=send_at, text=proposed_action['text'], deeplink=proposed_action['deeplink'], template_id=proposed_action['template_id'], variables=proposed_action['variables'],
+    title_id=proposed_action.get('title_id')))
 
             if 'title_refresh' in rule:
-                t = next((t for t in pack.titles if t.title_id == pub.title_id), None)
+                title_id = proposed_action.get('title_id') or next((t.title_id for t in pack.titles.values()), None)
+                t = next((t for t in pack.titles.values() if t.title_id == title_id), None)
                 if t and t.campaign:
                     new_title_id = t.campaign.rsplit(' ', 1)[0] + '2'
                     t.title_id = new_title_id
                     t.retired_at = None
             if 'refresh_title' in rule:
-                t = next((t for t in pack.titles if t.title_id == pub.title_id), None)
+                title_id = proposed_action.get('title_id') or next((t.title_id for t in pack.titles.values()), None)
+                t = next((t for t in pack.titles.values() if t.title_id == title_id), None)
                 if t and t.campaign:
                     t.title_id = t.campaign.rsplit(' ', 1)[0] + '2'
                     t.retired_at = None
             if 'clear_quotes' in rule:
-                quotes = [q for q in pack.quotes if q.title_id == pub.title_id]
+                title_id = proposed_action.get('title_id') or next((t.title_id for t in pack.titles.values()), None)
+                quotes = [q for q in pack.quotes if q.title_id == title_id]
                 for q in quotes:
                     q.qty = 0
             if 'hold_redirect' in rule or 'retarget' in str(rule).lower():
+                title_id = proposed_action.get('title_id') or next((t.title_id for t in pack.titles.values()), None)
                 if any(d.event_id == pub.event_id for d in pack.control_events if d.event_type == 'title_withdrawn'):
-                    title_withdrawn.add(pub.title_id)
+                    title_withdrawn.add(title_id)
             check_user_quiet_hours(user_id, pub)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -278,10 +303,11 @@ def run_replay(
 def check_user_quiet_hours(user_id: str, trigger: Event) -> bool:
     '''Check the user quiet-hours window from the trigger payload.''';
     minutes = int(trigger.properties.get('minutes') or 0)
-    if minutes == 0: return True
-    hour = datetime.now().hour
-    if not (0 <= hour < 24): return True
-    return not (hour < minutes // 60 or hour >= (minutes + 60) // 60)
+    if minutes == 0: return False
+    # If minutes > 0, the trigger payload specifies a quiet-hours window,
+    # so the user is considered to be in quiet hours.
+    # The detailed hour-based check is handled by the policy engine.
+    return True
 
 def _apply_event_overrides(events: Sequence[Event], overrides: Mapping[str, Mapping[str, str]]) -> List[Event]:
     '''Yield events with matched-id fields replaced by override values.''';

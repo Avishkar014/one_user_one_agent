@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data_loader import (DataPack, DataPackPaths, Event, LoadReport)
+from src.data_loader import (DataPack, DataPackPaths, Event, LoadReport, Title)
 from src.goals import RuleCorrection, GoalSpec
 from src.model_client import ModelClient, ModelDecision
 from src.policy import PolicyEngine, PolicyResult
@@ -102,7 +102,7 @@ def load_synthetic_pack(tmp_path, titles=None, events=None, profiles=None, episo
 
 def test_end_to_end_trigger_processing(tmp_path):
     # A single trigger produces exactly one decision and optionally one action.
-    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[], episodes={})
+    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')}, profiles={}, arms={}, events=[make_event(event_id='e1', goal_id='G01')], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -138,9 +138,9 @@ def test_end_to_end_trigger_processing(tmp_path):
 
 def test_deliver_at_ordering(tmp_path):
     # Triggers with earlier deliver_at must be processed first.
-    e1 = make_event(event_id='e2', delivered_at='2026-09-30T15:00:00.000Z')
-    e2 = make_event(event_id='e1', delivered_at='2026-09-30T14:00:00.000Z')
-    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[e2, e1], episodes={})
+    e1 = make_event(event_id='e2', delivered_at='2026-09-30T15:00:00.000Z', goal_id='G01')
+    e2 = make_event(event_id='e1', delivered_at='2026-09-30T14:00:00.000Z', goal_id='G01')
+    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')}, profiles={}, arms={}, events=[e2, e1], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -164,7 +164,7 @@ def test_deliver_at_ordering(tmp_path):
 
 def test_holdout_exclusion(tmp_path):
     # Holdout users never receive decisions or actions.
-    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[], episodes={})
+    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[make_event(event_id='e1', goal_id='G01')], episodes={})
     pack.holdout_users = {'U-00001'}
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -215,9 +215,9 @@ def test_model_fault_recording(tmp_path):
 
 def test_jsonl_schemas_and_determinism(tmp_path):
     # Output files are valid JSONL and byte-stable across re-runs.
-    e1 = make_event(event_id='e1', delivered_at='2026-09-30T10:00:00.000Z')
-    e2 = make_event(event_id='e2', delivered_at='2026-09-30T10:01:00.000Z')
-    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[e1, e2], episodes={})
+    e1 = make_event(event_id='e1', delivered_at='2026-09-30T10:00:00.000Z', goal_id='G01')
+    e2 = make_event(event_id='e2', delivered_at='2026-09-30T10:01:00.000Z', goal_id='G01')
+    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')}, profiles={}, arms={}, events=[e1, e2], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
