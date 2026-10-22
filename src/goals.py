@@ -169,8 +169,11 @@ class GoalSpec:
 
 def load_goal_specs(path: str) -> Dict[str, GoalSpec]:
     """Read ``config/goals.json`` and return the goals keyed by ``goal_id``."""
-    with open(path, encoding="utf-8") as handle:
-        raw = json.load(handle)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
     specs: Dict[str, GoalSpec] = {}
     for entry in raw.get("goals", []):
         goal_id = str(entry.get("goal_id") or "").strip()
