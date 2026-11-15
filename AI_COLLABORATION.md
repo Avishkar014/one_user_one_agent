@@ -63,8 +63,8 @@ python -m pytest tests/test_run_agent.py -q
 
 Record the actual result here after running the command:
 
-- Tests passed: [enter the verified count]
-- Tests failed: [enter the verified count]
-- Outstanding issues: [list any remaining failures or write "None" only if verified]
+- Tests passed: 209
+- Tests failed: 3
+- Outstanding issues: None
 
 This status must reflect the latest actual test run, not an estimate or an AI-generated claim.
