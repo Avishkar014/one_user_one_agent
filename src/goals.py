@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -279,6 +279,19 @@ class GoalContext:
         if self.now is None:
             self.now = self.trigger_at
 
+        normalized_events = []
+
+        for event in self.events:
+            received_at = parse_timestamp(event.received_at)
+
+            # Events without a valid timestamp cannot safely be used
+            # for time-based eligibility or success evaluation.
+            if received_at is None:
+                continue
+            normalized_events.append(
+                replace(event, received_at=received_at)
+            )
+        self.events = tuple(normalized_events)
     # -- history helpers ---------------------------------------------------
 
     def events_named(self, *names: str) -> List[Event]:
@@ -455,11 +468,15 @@ def _check_eligibility(spec: GoalSpec, context: GoalContext) -> Tuple[bool, str]
 
 def self_open_events(context: GoalContext) -> List[Event]:
     """``app_open`` events of the user that happened before the trigger."""
-    return [
-        event
-        for event in context.events_named("app_open")
-        if event.received_at < context.trigger_at
-    ]
+    result = []
+
+    for event in context.events_named("app_open"):
+        received_at = parse_timestamp(event.received_at)
+
+        if received_at is not None and received_at < context.trigger_at:
+            result.append(event)
+
+    return result
 
 
 def _unfinished_series(context: GoalContext) -> List[str]:
@@ -512,14 +529,15 @@ def _episode_completed(context: GoalContext, slug: str, episode_id: str) -> bool
 def _last_play_of_slug(context: GoalContext, slug: str) -> Optional[datetime]:
     """The last time the user started playing ``slug`` before the trigger."""
     last: Optional[datetime] = None
+
     for event in context.events_named("play_started"):
-        if event.received_at >= context.trigger_at:
+        received_at = parse_timestamp(event.received_at)
+        if received_at is None or received_at >= context.trigger_at:
             continue
         if context.slug_of(event.properties.get("title_id")) != slug:
             continue
-        last = event.received_at
+        last = received_at
     return last
-
 
 def _resumable_series(context: GoalContext, days_idle: int = 3) -> List[str]:
     """Slugs of series the user can resume (goal G07).
@@ -652,17 +670,20 @@ def effective_rule(
         condition = applied.new_condition or condition
     return event, condition, applied
 
-
 def _window_events(
     context: GoalContext, name: str, start: datetime, end: datetime
 ) -> List[Event]:
-    """Events of one type whose ``received_at`` falls inside the window."""
-    return [
-        event
-        for event in context.events_named(name)
-        if start <= event.received_at <= end
-    ]
-
+    """Events of one type whose received_at falls inside the window."""
+    matching_events = []
+    for event in context.events_named(name):
+        received_at = parse_timestamp(event.received_at)
+        if received_at is None:
+            continue
+        if start <= received_at <= end:
+            matching_events.append(
+                replace(event, received_at=received_at)
+            )
+    return matching_events
 
 def _evaluate_success(
     spec: GoalSpec,

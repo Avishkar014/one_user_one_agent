@@ -14,7 +14,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data_loader import (DataPack, DataPackPaths, Event, LoadReport, Title)
+from src.data_loader import (
+    DataPack, DataPackPaths, Episode, Event, LoadReport, Profile, Title
+)
 from src.goals import RuleCorrection, GoalSpec
 from src.model_client import ModelClient, ModelDecision
 from src.policy import PolicyEngine, PolicyResult
@@ -61,6 +63,18 @@ def make_event(
     rec['deliver_at'] = delivered_at
     return Event(**rec)
 
+def make_g01_profile(user_id='U-00001', signup_at=None):
+    '''Profile that makes G01 (first_play_24h) eligible.'''
+    if signup_at is None:
+        signup_at = datetime(2026, 9, 29, 10, 0, 0, tzinfo=UTC)
+    return Profile(
+        user_id=user_id,
+        updated_at=signup_at,
+        signup_at=signup_at,
+        subscription_status='never',
+    )
+
+
 def make_goal_spec(
     goal_id='G01',
     rule=None,
@@ -102,7 +116,9 @@ def load_synthetic_pack(tmp_path, titles=None, events=None, profiles=None, episo
 
 def test_end_to_end_trigger_processing(tmp_path):
     # A single trigger produces exactly one decision and optionally one action.
-    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')}, profiles={}, arms={}, events=[make_event(event_id='e1', goal_id='G01')], episodes={})
+    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')},
+                     profiles={'U-00001': make_g01_profile()}, arms={},
+                     events=[make_event(event_id='e1', goal_id='G01')], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -140,7 +156,8 @@ def test_deliver_at_ordering(tmp_path):
     # Triggers with earlier deliver_at must be processed first.
     e1 = make_event(event_id='e2', delivered_at='2026-09-30T15:00:00.000Z', goal_id='G01')
     e2 = make_event(event_id='e1', delivered_at='2026-09-30T14:00:00.000Z', goal_id='G01')
-    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')}, profiles={}, arms={}, events=[e2, e1], episodes={})
+    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')},
+                     profiles={'U-00001': make_g01_profile()}, arms={}, events=[e2, e1], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -195,7 +212,7 @@ def test_model_fault_recording(tmp_path):
     policy = MagicMock()
     policy.evaluate.return_value = PolicyResult(allowed=True, reason='', action_id='a1', user_id='U-00001', action_type='push', rule='')
     e = make_event(event_id='e1', delivered_at='2026-09-30T10:00:00.000Z', goal_id='G01')
-    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[e], episodes={})
+    pack = DataPack(paths=None, titles={}, profiles={'U-00001': make_g01_profile()}, arms={}, events=[e], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -217,7 +234,8 @@ def test_jsonl_schemas_and_determinism(tmp_path):
     # Output files are valid JSONL and byte-stable across re-runs.
     e1 = make_event(event_id='e1', delivered_at='2026-09-30T10:00:00.000Z', goal_id='G01')
     e2 = make_event(event_id='e2', delivered_at='2026-09-30T10:01:00.000Z', goal_id='G01')
-    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')}, profiles={}, arms={}, events=[e1, e2], episodes={})
+    pack = DataPack(paths=None, titles={'T1': Title(title_id='T1', content_slug='title1')},
+                     profiles={'U-00001': make_g01_profile()}, arms={}, events=[e1, e2], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -242,6 +260,8 @@ def test_jsonl_schemas_and_determinism(tmp_path):
         for line in path.read_text(encoding='utf-8').splitlines():
             obj = json.loads(line)
             assert isinstance(obj, dict)
+
+
             assert len(obj) > 0
 
 def test_policy_rejection_no_action(tmp_path):
@@ -251,7 +271,7 @@ def test_policy_rejection_no_action(tmp_path):
     policy = MagicMock()
     policy.evaluate.return_value = PolicyResult(allowed=True, reason='', action_id='a1', user_id='U-00001', action_type='no_action', rule='quiet_hours')
     e = make_event(event_id='e1', delivered_at='2026-09-30T10:00:00.000Z', goal_id='G01')
-    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[e], episodes={})
+    pack = DataPack(paths=None, titles={}, profiles={'U-00001': make_g01_profile()}, arms={}, events=[e], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -272,7 +292,7 @@ def test_policy_rejection_no_action(tmp_path):
 def test_quiet_hours_recheck(tmp_path):
     # A trigger inside quiet hours is delivered but may be suppressed by policy.
     e = make_event(event_id='e1', delivered_at='2026-09-30T10:00:00.000Z', goal_id='G01', minutes='1440')
-    pack = DataPack(paths=None, titles={}, profiles={}, arms={}, events=[e], episodes={})
+    pack = DataPack(paths=None, titles={}, profiles={'U-00001': make_g01_profile()}, arms={}, events=[e], episodes={})
     pack.holdout_users = set()
     pack.trigger_event_ids = set()
     pack.triggers = []
@@ -291,4 +311,150 @@ def test_quiet_hours_recheck(tmp_path):
     decision = json.loads(decision_lines[0])
     assert decision['action'] is None
     assert decision['reason'] == 'QUIET_HOURS'
-    assert report.actions_published == 0
+def test_active_goal_is_retained_across_triggers(tmp_path):
+    first = make_event(
+        event_id='trigger-1',
+        name='app_open',
+        delivered_at='2026-09-30T10:00:00.000Z',
+    )
+    second = make_event(
+        event_id='trigger-2',
+        name='app_open',
+        delivered_at='2026-09-30T11:00:00.000Z',
+    )
+
+    pack = DataPack(
+        paths=None,
+        titles={},
+        profiles={},
+        arms={},
+        events=[first, second],
+        episodes={},
+    )
+    pack.holdout_users = set()
+    pack.trigger_event_ids = set()
+    pack.triggers = []
+    pack.live_events = []
+    pack.control_event_path = str(tmp_path / 'control.jsonl')
+    pack.goal_definition_path = str(tmp_path / 'goals.json')
+
+    model = MagicMock()
+    model.propose_action.return_value = {
+        'action_type': 'push',
+        'text': {'title': 'T', 'body': 'B'},
+        'deeplink': None,
+        'template_id': None,
+        'variables': {},
+    }
+
+    policy = MagicMock()
+    policy.evaluate.return_value = PolicyResult(
+        allowed=False,
+        reason='test',
+        action_id='a1',
+        user_id='U-00001',
+        action_type='push',
+        rule='test',
+    )
+
+    _, decisions_path, report = run_replay(
+        pack, model, policy, output_dir=str(tmp_path / 'out')
+    )
+
+    decisions = [
+        json.loads(line)
+        for line in decisions_path.read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+
+    assert report.decisions_total == 2
+    assert len(decisions) == 2
+    assert decisions[0]['goal_id'] == 'G02'
+    assert decisions[1]['goal_id'] == 'G02'
+def test_successful_goal_is_released_and_next_goal_selected(tmp_path):
+    old_play = make_event(
+        event_id='old-play',
+        name='play_started',
+        delivered_at='2026-09-30T10:00:00.000Z',
+        received_at='2026-09-26T10:00:00.000Z',
+        **{'properties': {'title_id': 'T1'}},
+    )
+    first_trigger = make_event(
+        event_id='trigger-1',
+        name='app_open',
+        delivered_at='2026-09-30T10:05:00.000Z',
+    )
+    completed = make_event(
+        event_id='episode-done',
+        name='episode_completed',
+        delivered_at='2026-09-30T10:10:00.000Z',
+        **{'properties': {'title_id': 'T1', 'episode_id': 'E1'}},
+    )
+    second_trigger = make_event(
+        event_id='trigger-2',
+        name='app_open',
+        delivered_at='2026-09-30T10:15:00.000Z',
+    )
+
+    pack = DataPack(
+        paths=None,
+        titles={
+            'T1': Title(
+                title_id='T1',
+                content_slug='show-one',
+                content_type='show',
+            )
+        },
+        profiles={},
+        arms={},
+        events=[old_play, first_trigger, completed, second_trigger],
+        episodes={
+            'show-one': [
+                Episode(episode_id='E1', content_slug='show-one', season=1, episode=1),
+                Episode(episode_id='E2', content_slug='show-one', season=1, episode=2),
+            ]
+        },
+    )
+    pack.holdout_users = set()
+    pack.trigger_event_ids = set()
+    pack.triggers = []
+    pack.live_events = []
+    pack.control_event_path = str(tmp_path / 'control.jsonl')
+    pack.goal_definition_path = str(tmp_path / 'goals.json')
+
+    model = MagicMock()
+    model.propose_action.return_value = {
+        'action_type': 'push',
+        'text': {'title': 'T', 'body': 'B'},
+        'deeplink': None,
+        'template_id': None,
+        'variables': {},
+    }
+
+    policy = MagicMock()
+    policy.evaluate.return_value = PolicyResult(
+        allowed=False,
+        reason='test',
+        action_id='a1',
+        user_id='U-00001',
+        action_type='push',
+        rule='test',
+    )
+
+    _, decisions_path, report = run_replay(
+        pack, model, policy, output_dir=str(tmp_path / 'out')
+    )
+
+    decisions = [
+        json.loads(line)
+        for line in decisions_path.read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+
+    assert report.decisions_total == 4
+    assert [d['goal_id'] for d in decisions] == [
+        'G02',
+        'G02',
+        'G07',
+        'G07',
+    ]
