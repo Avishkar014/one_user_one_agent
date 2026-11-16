@@ -221,20 +221,6 @@ def run_replay(
                     goal_started_at=active_info['started_at'],
                     evaluated_at=evt_time,
                 )
-                if active_info['goal_spec'].goal_id == 'G02':
-                    print(
-                        'DEBUG G02:',
-                        node.event_id,
-                        node.event,
-                        'at=', evt_time,
-                        'events=', [
-                            (e.event_id, e.event, e.received_at)
-                            for e in goal_context.events
-                        ],
-                        'outcome=', outcome.state,
-                        'reason=', outcome.reason,
-                        'evidence=', outcome.evidence,
-                    )
                 if outcome.state in (SUCCEEDED, FAILED):
                     # Goal window closed; free the slot for a new selection.
                     del active_goals[user_id]
@@ -326,26 +312,36 @@ def run_replay(
                 title_id = proposed_action.get('title_id') or next((t.title_id for t in pack.titles.values()), None)
                 if any(d.event_id == pub.event_id for d in pack.control_events if d.event_type == 'title_withdrawn'):
                     title_withdrawn.add(title_id)
-            check_user_quiet_hours(user_id, pub)
-
     os.makedirs(output_dir, exist_ok=True)
     decisions_path = Path(output_dir) / 'decisions.jsonl'
     actions_path = Path(output_dir) / 'actions.jsonl'
+
     with open(decisions_path, 'w', encoding='utf-8') as fh:
-        for d in decisions:
-            fh.write(json.dumps(d.__dict__, ensure_ascii=True) + chr(10))
+        for decision in decisions:
+            fh.write(json.dumps(decision.__dict__, ensure_ascii=True) + '\n')
+
     with open(actions_path, 'w', encoding='utf-8') as fh:
-        for a in actions:
-            fh.write(json.dumps(a.__dict__, ensure_ascii=True) + chr(10))
-    return actions_path, decisions_path, RunReport(decisions_total=len(decisions), actions_published=len(actions), no_action_decisions=sum(1 for d in decisions if d.action is None and d.reason != ''), fault_no_action_decisions=sum(1 for d in decisions if d.reason == 'FAULT'), policy_no_action_decisions=sum(1 for d in decisions if d.reason == 'POLICY'), holdout_decisions=sum(1 for d in decisions if d.reason == 'HOLDOUT'), errors=report_errors)
+        for action in actions:
+            fh.write(json.dumps(action.__dict__, ensure_ascii=True) + '\n')
+
+    report = RunReport(
+        decisions_total=len(decisions),
+        actions_published=len(actions),
+        no_action_decisions=sum(
+            1 for d in decisions if d.action is None and d.reason != ''
+        ),
+        fault_no_action_decisions=sum(1 for d in decisions if d.reason == 'FAULT'),
+        policy_no_action_decisions=sum(1 for d in decisions if d.reason == 'POLICY'),
+        holdout_decisions=sum(1 for d in decisions if d.reason == 'HOLDOUT'),
+        errors=report_errors,
+    )
+    return actions_path, decisions_path, report
 
 def check_user_quiet_hours(user_id: str, trigger: Event) -> bool:
-    '''Check the user quiet-hours window from the trigger payload.''';
+    """Check the user's quiet-hours window from the trigger payload."""
     minutes = int(trigger.properties.get('minutes') or 0)
-    if minutes == 0: return False
-    # If minutes > 0, the trigger payload specifies a quiet-hours window,
-    # so the user is considered to be in quiet hours.
-    # The detailed hour-based check is handled by the policy engine.
+    if minutes == 0:
+        return False
     return True
 
 def _apply_event_overrides(events: Sequence[Event], overrides: Mapping[str, Mapping[str, str]]) -> List[Event]:

@@ -307,7 +307,7 @@ class GoalContext:
         for event in self.events:
             if event.event != name:
                 continue
-            if before is not None and event.received_at >= before:
+            if before is not None and event.received_at > before:
                 continue
             return True
         return False
