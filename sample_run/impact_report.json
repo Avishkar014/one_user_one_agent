@@ -1,0 +1,68 @@
+{
+  "method": "Intent-to-treat: all users assigned to each randomized arm are included, including users without observed events.",
+  "assigned_users": {
+    "agent": 2513,
+    "holdout": 2487,
+    "total": 5000
+  },
+  "outcomes": {
+    "play_started": {
+      "agent": {
+        "assigned_users": 2513,
+        "users_with_outcome": 638,
+        "rate": 0.25388,
+        "rate_percent": 25.388
+      },
+      "holdout": {
+        "assigned_users": 2487,
+        "users_with_outcome": 669,
+        "rate": 0.268999,
+        "rate_percent": 26.9
+      },
+      "absolute_difference_percentage_points": -1.512,
+      "approximate_95_percent_ci_percentage_points": [
+        -3.948,
+        0.924
+      ]
+    },
+    "episode_completed": {
+      "agent": {
+        "assigned_users": 2513,
+        "users_with_outcome": 458,
+        "rate": 0.182252,
+        "rate_percent": 18.225
+      },
+      "holdout": {
+        "assigned_users": 2487,
+        "users_with_outcome": 502,
+        "rate": 0.20185,
+        "rate_percent": 20.185
+      },
+      "absolute_difference_percentage_points": -1.96,
+      "approximate_95_percent_ci_percentage_points": [
+        -4.143,
+        0.224
+      ]
+    },
+    "purchase_completed": {
+      "agent": {
+        "assigned_users": 2513,
+        "users_with_outcome": 34,
+        "rate": 0.01353,
+        "rate_percent": 1.353
+      },
+      "holdout": {
+        "assigned_users": 2487,
+        "users_with_outcome": 36,
+        "rate": 0.014475,
+        "rate_percent": 1.448
+      },
+      "absolute_difference_percentage_points": -0.094,
+      "approximate_95_percent_ci_percentage_points": [
+        -0.746,
+        0.557
+      ]
+    }
+  },
+  "interpretation": "These are synthetic simulator outcomes, not observed production effects. Broad outcomes are not equivalent to goal-specific success. Approximate confidence intervals do not account for simulator-model uncertainty."
+}

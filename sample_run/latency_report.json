@@ -1,0 +1,20 @@
+{
+  "decision_processing_ms": {
+    "count": 2255,
+    "p50": 1.0,
+    "p95": 6.0,
+    "p99": 10.0,
+    "max": 157.0
+  },
+  "trigger_to_action_publication_seconds": {
+    "count": 390,
+    "p50": 0.003,
+    "p95": 0.007,
+    "p99": 0.01,
+    "max": 0.125,
+    "within_60_seconds": 390,
+    "over_60_seconds": 0,
+    "missing_timestamps": 0
+  },
+  "note": "Processing latency and trigger-to-publication latency are separate measurements. Missing timestamps are not treated as SLA successes."
+}

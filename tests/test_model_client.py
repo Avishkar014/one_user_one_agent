@@ -1,6 +1,6 @@
-"""Tests for :mod:`src.model_client`: model output validation + PolicyEngine delegation + safe fallback."""
-
 from __future__ import annotations
+
+"""Tests for :mod:`src.model_client`: model output validation + PolicyEngine delegation + safe fallback."""
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
@@ -582,3 +582,26 @@ def test_complete_passes_proposed_action_to_engine(client, engine, trigger_at):
     assert engine.validate_called_with["user_id"] == "u1"
     assert engine.validate_called_with["type"] == "push"
     assert engine.validate_called_with["trigger_event_id"] == "trig-1"
+def test_complete_rejects_model_goal_mismatch(client, engine, trigger_at):
+    client.register_output("trig-mismatch", {
+        "goal_id": "G02",
+        "eligible": True,
+        "confidence": 0.9,
+        "reason": "user watched similar content",
+        "text": {"title": "New episode", "body": "Watch now"},
+    })
+
+    decision = client.complete(
+        "trig-mismatch",
+        "u1",
+        trigger_at,
+        action_type="push",
+        goal_id="G01",
+    )
+
+    assert decision.allowed is False
+    assert decision.action_type == "no_action"
+    assert decision.rule == "goal_mismatch"
+    assert "G02" in decision.reason
+    assert "G01" in decision.reason
+    assert engine.validate_called_with is None

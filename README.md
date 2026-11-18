@@ -1,18 +1,19 @@
 # One User, One Agent
 
-A deterministic replay system for processing user events, evaluating agent decisions, applying policy checks, and recording resulting actions. The goal is to make each user's agent behavior traceable, testable, and safe to operate.
+A deterministic, replayable agent system that processes user events, selects measurable goals, evaluates actions, enforces policy constraints, and records decisions and outcomes. Each user's agent behavior is designed to be traceable, testable, and safe.
 
 ## Prerequisites
 
 - Python 3.10 or later
+- Git
 - Windows, macOS, or Linux
-- A virtual environment for project dependencies
+- No external model API key required for deterministic replay
 
 ## Setup
 
-1. Clone or download the project.
-2. Open a terminal in the project root.
-3. Create and activate a virtual environment.
+Clone the repository and enter its root directory.
+
+Create and activate a virtual environment.
 
 **Windows PowerShell**
 
@@ -28,59 +29,102 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-4. Install the project dependencies:
+Install dependencies:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-5. Configure any required environment variables or local data paths according to the project configuration.
+## Run the complete workflow
 
-## Run the full replay
+Run the following commands from the project root, in order.
 
-The full replay should be launched through the project's replay entry point, which loads the required data, processes events, evaluates decisions, applies policy checks, and writes the run outputs.
-
-**Single-command replay:**
+### 1. Execute the agent replay
 
 ```bash
 python -m src.run_agent
 ```
 
-> Confirm this command is supported by the current implementation. If `src/run_agent.py` requires arguments or the project uses a separate CLI entry point, replace it with the actual supported command before submission.
+This loads the data pack, processes replay triggers, evaluates goals, applies policy checks, and writes:
+
+- `sample_run/decisions.jsonl`
+- `sample_run/actions.jsonl`
+
+### 2. Simulate outcomes
+
+```bash
+python data_pack/one_user_one_agent_pack/simulator/simulate_outcomes.py --pack data_pack/one_user_one_agent_pack --actions sample_run/actions.jsonl --out sample_run/sim
+```
+
+This generates simulated follow-up events and a simulator report under `sample_run/sim/`.
+
+### 3. Generate reports
+
+```bash
+python -m src.reporting
+```
+
+This generates:
+
+- `sample_run/viewer_state.jsonl`
+- `sample_run/goal_outcomes.jsonl`
+- `sample_run/latency_report.json`
+- `sample_run/impact_report.json`
+- `sample_run/final_report.md`
+
+The final report summarizes replay activity, reconstructed goal outcomes, latency, and randomized-arm intent-to-treat results.
 
 ## Run the tests
 
-Run the replay tests with:
-
-```bash
-python -m pytest tests/test_run_agent.py -q
-```
-
-Run the full test suite with:
+Run the complete test suite:
 
 ```bash
 python -m pytest -q
 ```
 
-## Outputs
+Run focused replay and model-client tests:
 
-The replay implementation is expected to produce structured JSON Lines output files, including:
+```bash
+python -m pytest tests/test_model_client.py tests/test_run_agent.py -q
+```
 
-- `decisions.jsonl` — decision records, including relevant outcomes and reasons.
-- `actions.jsonl` — action records for actions that pass the applicable processing and policy checks.
+## Output structure
 
-The actual output directory is determined by the runner configuration. Inspect the generated records to verify decision outcomes, action publication, and reproducibility.
+```text
+sample_run/
+    actions.jsonl
+    decisions.jsonl
+    viewer_state.jsonl
+    goal_outcomes.jsonl
+    latency_report.json
+    impact_report.json
+    final_report.md
+    sim/
+        outcome_events.jsonl
+        simulator_report.json
+```
+
+The JSONL files contain one JSON record per line. The JSON reports contain aggregated measurements and summaries.
+
+## Measurement notes
+
+- Intent-to-treat comparisons use all users assigned to each randomized arm, including users without observed outcome events.
+- Goal outcomes are reconstructed from selected-goal decisions and simulated events. They are not goal-specific causal estimates.
+- Simulator outcomes are synthetic and must not be interpreted as production performance.
+- Confidence intervals are approximate and do not account for simulator-model uncertainty.
+- Unmeasurable or incompletely observed goal windows must not be reported as successful or failed without supporting evidence.
 
 ## Design goals
 
 - **Single-user ownership:** Keep each agent's decisions and state associated with the correct user.
-- **Traceability:** Record why a decision was accepted, rejected, or held.
-- **Policy enforcement:** Prevent actions that violate applicable policy rules.
-- **Deterministic replay:** Make repeated runs over the same inputs reproducible where external dependencies and nondeterministic components are controlled.
-- **Failure isolation:** Record and handle failures without silently treating them as successful actions.
+- **Traceability:** Record decisions, reasons, evidence, and action outcomes.
+- **Policy enforcement:** Prevent actions that violate consent, availability, frequency, quiet-hour, and other applicable constraints.
+- **Deterministic replay:** Support repeatable execution against the supplied data pack.
+- **Failure isolation:** Handle model and dependency failures safely without treating failures as successful actions.
+- **Measurement integrity:** Separate operational metrics, reconstructed goal outcomes, and randomized-arm impact estimates.
 
 ## Project documentation
 
 - `ARCHITECTURE.md` — component responsibilities, planning, memory, verification, latency, recovery, and trust boundaries.
 - `AI_COLLABORATION.md` — AI-assisted development and verification practices.
-- `KNOWN_LIMITATIONS.md` — incomplete areas, current constraints, and deliberate scope decisions.
+- `KNOWN_LIMITATIONS.md` — current constraints, incomplete areas, and deliberate scope decisions.
