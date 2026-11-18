@@ -2,156 +2,270 @@
 
 ## 1. Overview
 
-The system processes user events through a replay pipeline. It evaluates whether an event should trigger an agent decision, checks the proposed action against policy, and records the result for inspection.
+One User, One Agent is a replay-driven decision system that processes user events, maintains user-scoped goal context, evaluates eligibility, and determines whether an action can be published.
 
-The intended processing flow is:
+The architecture separates event processing, decision generation, independent policy verification, action publication, and outcome reporting. A model proposal is never treated as sufficient authorization to publish an action.
+
+The implemented processing flow is:
 
 ```text
-Input Data
-    |
-    v
+Input Data Pack
+      |
+      v
 Data Loading and Validation
-    |
-    v
-Event Processing and Ordering
-    |
-    v
-Trigger and Eligibility Checks
-    |
-    v
+      |
+      v
+Historical Event Loading
+      |
+      v
+Event Ordering and Trigger Processing
+      |
+      v
+User-Scoped Goal Context
+      |
+      v
+Eligibility and Trigger Checks
+      |
+      v
 Agent / Model Decision
-    |
-    v
-Policy Evaluation
-    |
-    v
+      |
+      v
+Independent Policy Verification
+      |
+      +------ Rejected / Held / Fault
+      |                 |
+      v                 v
+Action Publication   Decision Record
+      |
+      v
 Decision and Action Records
-    |
-    v
-Replay Report
+      |
+      v
+Simulator and Outcome Reporting
+      |
+      v
+Impact, Latency and Final Reports
 ```
 
-The exact behavior of each stage depends on the implementation and configuration in the source code.
+The replay runner is the primary execution entry point. The reporting module reconstructs goal outcomes and produces reports from the generated decisions, actions, and simulator outputs.
 
-## 2. Ownership
+## 2. User and state ownership
 
-The system is designed around the principle of one agent per user.
+The system follows a one-agent-per-user design.
 
-- **User ownership:** Events, decisions, and resulting actions should retain their user association.
-- **State ownership:** Any user-specific memory or state should be scoped to that user.
-- **Decision ownership:** A decision should be traceable to the event and user that caused it.
-- **Output ownership:** Output records should preserve user identifiers for auditing and debugging.
+- **User ownership:** Events, decisions, goals, and actions retain their user association.
+- **Goal ownership:** Goal context is maintained for the corresponding user.
+- **Decision ownership:** Decisions are associated with the user and triggering event.
+- **Output ownership:** Structured records retain the identifiers needed for auditing and debugging.
 
-Cross-user state or data access should not occur unless explicitly authorized by the system's design.
+The goal-management flow enforces one active goal per user. Goal selection and release are handled through the goal-management and replay orchestration logic.
 
-## 3. Planning and decision-making
+User-specific state must not be shared across users. The replay implementation should not be interpreted as a guarantee of distributed or production-grade state isolation.
 
-The replay pipeline evaluates incoming events and determines whether they are eligible for processing. When an event qualifies, the agent or model proposes a decision.
+## 3. Event processing and ordering
 
-The proposal is not automatically treated as an approved action. It must pass the applicable validation and policy checks before it can be published.
+The replay runner loads the supplied data pack and processes eligible events using their event-processing timestamps and ordering rules.
 
-The system should distinguish between:
+Important event-processing considerations include:
 
-1. An event that is not eligible for processing.
-2. A decision that is held or rejected.
-3. A model or processing failure.
-4. A decision that is permitted to produce an action.
+- Event identifiers are used for duplicate handling.
+- Event receipt time is trusted for processing and freshness decisions where specified by the data contract.
+- Unreliable event timestamps are not automatically treated as authoritative.
+- Stale buffered app events must not be treated as fresh user activity.
+- Events received after a relevant decision boundary must not incorrectly influence that earlier decision.
+- Conflicting or corrected source information must be evaluated according to its provenance and freshness.
 
-This separation makes it possible to understand why an action was or was not generated.
+The event-processing layer is responsible for ensuring that historical events and incoming triggers are interpreted consistently during replay.
 
-## 4. Memory
+## 4. Goal management and decision-making
 
-User-specific memory should be isolated by user identity and should only contain information needed for the agent's task.
+The agent evaluates whether a user has an eligible, measurable goal before selecting an action.
 
-Memory handling should follow these principles:
+The goal-management process considers:
+
+- Goal eligibility and configured success conditions.
+- Goal priority and selection rules.
+- Existing active goal context.
+- New evidence and relevant event boundaries.
+- Goal completion, release, and reselection.
+
+Only one goal is active for a user at a time. Goals whose success conditions cannot be measured from the available data must not be treated as measurable goals.
+
+When a trigger qualifies for processing, the agent determines whether an action is appropriate. Possible outcomes include no action or an action proposal such as a push notification.
+
+A decision can be rejected or held even when the model proposes an action.
+
+## 5. Model integration and validation
+
+The model client is responsible for obtaining and validating model decisions.
+
+The implementation supports controlled replay behavior so that the assignment can be executed without requiring a live model API key. Model-output handling includes validation of the expected structure and checks for unsupported claims.
+
+The model integration also handles configured fault scenarios, including malformed responses, timeouts, and unsupported claims.
+
+Important principles:
+
+- Model output is untrusted input.
+- A structurally valid response is not automatically a permitted action.
+- Unsupported claims must not establish user eligibility or policy compliance.
+- Model failures must not silently become successful actions.
+- Safe fallback behavior must be used when a model response cannot be accepted.
+
+Model calls and tool usage are subject to configured limits.
+
+## 6. Independent policy verification
+
+The policy-verification layer independently evaluates whether a proposed action is allowed.
+
+It checks relevant conditions such as:
+
+- User and goal eligibility.
+- Holdout assignment.
+- Notification consent and channel-specific opt-in.
+- Quiet hours.
+- Frequency limits.
+- Content availability and dialect compatibility.
+- Duplicate-action prevention.
+- Policy restrictions and required action structure.
+
+For example, push notifications require the appropriate notification consent. Quiet hours and daily frequency restrictions are checked before publication.
+
+The verifier does not rely on a model's assertion that an action is permitted. The proposal must satisfy the actual policy checks.
+
+This separation between proposal generation and authorization is a central architectural boundary.
+
+## 7. Memory and user context
+
+The implementation maintains user-scoped goal context and uses available event and profile evidence during decision-making.
+
+Memory-related decisions must respect the following principles:
 
 - Do not mix one user's state with another user's state.
-- Validate input before adding it to persistent memory.
-- Keep only information necessary for the intended behavior.
-- Define how stale or invalid memory is handled.
-- Make memory-dependent decisions traceable where practical.
+- Do not treat stale profile information as automatically authoritative.
+- Consider provenance and freshness when evidence conflicts.
+- Keep goal state consistent with the relevant event history.
+- Make decision outcomes traceable through structured records.
 
-The replay system's actual persistent-memory capabilities should be confirmed in the implementation. If memory persistence is not implemented, this document describes a design requirement rather than a completed feature.
+The implemented replay workflow maintains the state required for its processing and reporting. It should not be described as a general-purpose persistent conversational memory system or a production distributed-memory service.
 
-## 5. Verification
+## 8. Verification and testing
 
-Verification should occur at multiple levels:
+Verification occurs at multiple levels.
 
-- **Input verification:** Check required fields, data types, and event structure.
-- **Processing verification:** Confirm that events are processed in the intended order.
-- **Decision verification:** Check the shape and validity of model output.
-- **Policy verification:** Ensure rejected or disallowed actions are not published.
-- **Output verification:** Validate JSONL records and required fields.
-- **Regression verification:** Run automated tests for normal behavior and failure cases.
-- **Determinism verification:** Replay the same controlled inputs and compare the outputs.
+- **Input verification:** Validate required data and expected input structures.
+- **Event verification:** Check event ordering, duplicate handling, and processing boundaries.
+- **Goal verification:** Check eligibility, measurable conditions, and active-goal transitions.
+- **Model verification:** Validate model response structure and unsupported claims.
+- **Policy verification:** Reject actions that violate eligibility, consent, quiet-hour, frequency, or content rules.
+- **Output verification:** Inspect structured decision and action records.
+- **Regression verification:** Run automated tests covering normal processing and failure scenarios.
+- **Replay verification:** Execute the complete pipeline and inspect generated outputs.
 
-The primary replay test command is:
+The complete automated test suite was executed successfully:
 
 ```bash
-python -m pytest tests/test_run_agent.py -q
+python -m pytest -q
 ```
 
-A passing test suite is evidence for the cases covered by the tests; it does not prove that every production scenario is safe or correct.
+**Latest verified result:**
+- Tests passed: 213
+- Tests failed: 0
 
-## 6. Latency
+The test suite provides evidence for the covered scenarios; it does not establish that every possible production scenario is safe or correct.
 
-The replay pipeline may include data loading, event processing, model inference, policy evaluation, and output writing.
+## 9. Latency and performance
 
-Potential latency contributors include:
+Latency is measured separately for decision processing and trigger-to-action publication.
 
-- Large input datasets.
-- Model or API response times.
-- Repeated policy evaluations.
-- Disk I/O when writing output records.
-- Retries following transient failures.
+The completed replay produced the following measurements:
 
-Latency should be measured using representative workloads before making performance claims. Useful measurements include total replay duration, per-event processing time, model latency, and failure or retry counts.
+| Measurement | Result |
+|---|---:|
+| Decisions processed | 2,255 |
+| Decision processing p50 | 1 ms |
+| Decision processing p95 | 6 ms |
+| Decision processing p99 | 10 ms |
+| Decision processing maximum | 157 ms |
+| Trigger-to-publication p50 | 0.003 s |
+| Trigger-to-publication p95 | 0.007 s |
+| Trigger-to-publication maximum | 0.125 s |
+| Actions published within 60 seconds | 390 / 390 |
 
-No latency target is claimed here unless it has been measured and documented separately.
+These are measurements from the supplied replay environment and its configured execution path. They are not production infrastructure or live API latency guarantees.
 
-## 7. Failure recovery
+## 10. Failure handling and recovery
 
-Failures should be handled explicitly rather than silently converted into successful decisions.
+The system distinguishes between ineligible events, policy rejections, model failures, and permitted decisions.
 
-Relevant failure cases include:
+Relevant failure scenarios include:
 
 - Invalid or missing input data.
-- Model errors or malformed model responses.
+- Malformed model responses.
+- Model timeouts.
+- Unsupported model claims.
 - Policy rejection.
 - Events that are not eligible for processing.
-- Output-writing failures.
-- Missing or invalid configuration.
+- Dependency or service failures.
+- Duplicate or stale events.
 
-Where supported, the system should record a structured reason for the outcome. Reasons such as `HOLDOUT`, `FAULT`, `POLICY`, and `QUIET_HOURS` can help distinguish different processing outcomes.
+Where supported, failures and decision outcomes are recorded with structured reasons.
 
-Retries should be limited to failures that are safe to retry. If action delivery is introduced, duplicate prevention and idempotency should be considered before retrying an operation whose result is uncertain.
+The replay implementation includes safe fallback behavior for model and processing failures. Fault scenarios can be exercised through the configured replay fault data.
 
-The exact recovery behavior must match the implemented code.
+Retries and action delivery must be treated carefully. Exactly-once delivery and distributed idempotency guarantees should not be inferred from replay behavior alone.
 
-## 8. Trust boundaries
+## 11. Trust boundaries
 
-The system should treat the following as separate trust boundaries:
+The system treats the following as separate trust boundaries:
 
-- **Input data:** Event fields and user-provided properties may be malformed or untrusted.
-- **Model output:** Model-generated text and structured proposals must be validated.
-- **Policy engine:** Policy evaluation determines whether a proposed action is permitted.
-- **External services:** APIs and other dependencies can fail or return unexpected results.
-- **Output records:** Logs and replay outputs may contain user-related information and should be handled appropriately.
+- **Input data:** Event fields, profile snapshots, and user-provided properties may be malformed, stale, or conflicting.
+- **Model output:** Model-generated proposals must be structurally and semantically validated.
+- **Policy verifier:** The verifier independently decides whether a proposal is permitted.
+- **External dependencies:** Model providers and other services may fail or return unexpected results.
+- **Output records:** Replay files may contain user-related information and must be handled appropriately.
 
-Model output should not bypass policy enforcement. Sensitive credentials should be supplied through configuration or environment variables rather than committed to source control.
+Model output must never bypass policy enforcement. Credentials and API keys should be supplied through environment variables or secure configuration rather than committed to source control.
 
-## 9. Outputs and observability
+## 12. Outputs and observability
 
-The replay runner writes structured records intended to support debugging and verification.
+The replay runner and reporting module generate structured outputs for inspection and evaluation.
 
-- `decisions.jsonl` records decision outcomes.
-- `actions.jsonl` records actions produced by the pipeline.
-- A replay report summarizes the run where supported.
+| Output | Purpose |
+|---|---|
+| `decisions.jsonl` | Records decision outcomes and associated context |
+| `actions.jsonl` | Records actions published by the pipeline |
+| `viewer_state.jsonl` | Reconstructed user-facing state |
+| `goal_outcomes.jsonl` | Reconstructed goal episodes and outcomes |
+| `latency_report.json` | Processing and publication latency measurements |
+| `impact_report.json` | Randomized-arm intent-to-treat outcome comparison |
+| `final_report.md` | Consolidated replay and evaluation summary |
+| `sim/outcome_events.jsonl` | Simulated outcome events |
+| `sim/simulator_report.json` | Simulator execution and policy-problem summary |
 
-Each record should contain enough information to trace its outcome without unnecessarily exposing sensitive user data.
+These outputs support debugging, auditability, and evaluation of the replay.
 
-## 10. Design trade-offs
+## 13. Experiment evaluation
 
-This architecture favors traceability and explicit decision outcomes over treating every event as a successful action. Deterministic replay and structured output make debugging easier, while policy checks provide a boundary between model proposals and permitted behavior.
+The assignment includes randomized agent and holdout groups.
 
-Production-grade guarantees—such as persistent memory isolation, exactly-once delivery, strict latency limits, and automatic recovery—must only be claimed when they are implemented and verified.
+Impact reporting uses an intent-to-treat approach: all users assigned to each randomized arm are included in the denominators, including users without observed outcome events.
+
+The simulator-generated results are synthetic. They are not production measurements.
+
+The reporting implementation distinguishes broad engagement and purchase outcomes from goal-specific success. It does not claim goal-specific causal uplift where the required holdout goal-eligibility reconstruction is unavailable.
+
+The confidence intervals are approximate and do not account for simulator-model uncertainty.
+
+## 14. Design trade-offs and limitations
+
+The architecture prioritizes traceability, explicit policy enforcement, and reproducible replay over treating every incoming event as an opportunity to publish an action.
+
+Key trade-offs include:
+
+- Controlled replay makes debugging reproducible but does not replace live production evaluation.
+- Model assistance provides flexibility, while independent verification limits what model proposals can authorize.
+- Structured records improve auditability but increase output volume.
+- Goal reconstruction enables evaluation but depends on the quality and coverage of the available event data.
+- Synthetic simulation enables controlled testing but cannot establish real-world business impact.
+
+Production-grade guarantees such as distributed state isolation, exactly-once delivery, strict infrastructure-level latency guarantees, and automatic recovery must only be claimed after implementation and independent verification.
